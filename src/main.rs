@@ -273,7 +273,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
     
     if args.len() < 2 {
-        eprintln!("Usage: {} <xml_file|--download> [--since DD.MM.YYYY] [--larger THRESHOLD] [--today]", args[0]);
+        eprintln!("Usage: {} <xml_file|--download> [--since DD.MM.YYYY] [--larger THRESHOLD] [--today|--local]", args[0]);
         eprintln!("Examples:");
         eprintln!("  {} AipsDownload_20260130.xml", args[0]);
         eprintln!("  {} AipsDownload_20260130.xml --since 01.01.2025", args[0]);
@@ -282,6 +282,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("  {} --download --larger 5000", args[0]);
         eprintln!("  {} --download --since 01.01.2025 --larger 5000", args[0]);
         eprintln!("  {} --download --today", args[0]);
+        eprintln!("  {} --download --local", args[0]);
         std::process::exit(1);
     }
     
@@ -346,6 +347,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Check for --today option
     let today_mode = args.iter().any(|arg| arg == "--today");
     
+    // Check for --local option
+    let local_mode = args.iter().any(|arg| arg == "--local");
+    
     // Extract filename from path
     let filename = Path::new(&xml_file)
         .file_name()
@@ -353,7 +357,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or("AipsDownload_20260130.xml");
     
     let output_date = extract_date_from_filename(filename);
-    let output_file = if today_mode {
+    let output_file = if today_mode || local_mode {
         "today".to_string()
     } else if let Some(threshold) = larger_threshold {
         format!("larger_{}_{}.csv", threshold, output_date)
@@ -381,8 +385,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("(excluded {} older records)", original_count - records.len());
     }
     
-    // If --today is specified, filter to today's date only and get unique identifiers
-    if today_mode {
+    // If --today or --local is specified, filter to today's date only and get unique identifiers
+    if today_mode || local_mode {
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let original_count = records.len();
         records.retain(|r| r.date == today);
@@ -415,22 +419,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         println!("Done! Output written to {}", output_file);
         
-        // Copy file to remote server
-        println!("Copying to remote server zdavatz@65.109.137.20:/var/www/pillbox.oddb.org/");
-        let scp_status = std::process::Command::new("scp")
-            .arg(&output_file)
-            .arg("zdavatz@65.109.137.20:/var/www/pillbox.oddb.org/")
-            .status();
-        
-        match scp_status {
-            Ok(status) if status.success() => {
-                println!("Successfully copied to remote server!");
+        if today_mode {
+            // Copy file to remote server
+            println!("Copying to remote server zdavatz@65.109.137.20:/var/www/pillbox.oddb.org/");
+            let scp_status = std::process::Command::new("scp")
+                .arg(&output_file)
+                .arg("zdavatz@65.109.137.20:/var/www/pillbox.oddb.org/")
+                .status();
+            
+            match scp_status {
+                Ok(status) if status.success() => {
+                    println!("Successfully copied to remote server!");
+                }
+                Ok(status) => {
+                    eprintln!("Warning: scp command failed with status: {}", status);
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to execute scp: {}", e);
+                }
             }
-            Ok(status) => {
-                eprintln!("Warning: scp command failed with status: {}", status);
-            }
-            Err(e) => {
-                eprintln!("Warning: Failed to execute scp: {}", e);
+        } else if local_mode {
+            // Copy file to local directory
+            let local_dest = "/var/www/oddb.org/data/txt/today";
+            println!("Copying to local directory {}...", local_dest);
+            
+            let copy_result = std::fs::copy(&output_file, local_dest);
+            match copy_result {
+                Ok(_) => {
+                    println!("Successfully copied to local directory!");
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to copy to local directory: {}", e);
+                    eprintln!("Make sure {} directory exists and is writable", "/var/www/oddb.org/data/txt/");
+                }
             }
         }
         
