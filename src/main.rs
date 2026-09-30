@@ -125,6 +125,45 @@ fn download_latest_xml() -> Result<String, Box<dyn std::error::Error>> {
     Ok(xml_filename)
 }
 
+/// The daily cron job runs in the home directory and saved a ZIP and an XML
+/// of about 25 MB there every day without ever removing one (5.1 GB by
+/// September 2026). Only the newest ones are worth keeping: the run reads
+/// the file it has just downloaded and nothing older.
+const KEEP_DOWNLOADS: usize = 3;
+
+fn prune_old_downloads(dir: &Path, keep: usize) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Warning: cannot list current directory: {}", e);
+            return;
+        }
+    };
+    // Group by the date in the name, so a day's ZIP and XML go together.
+    let mut dates: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut files: Vec<(String, String)> = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if let Some(rest) = name.strip_prefix("AipsDownload_") {
+            let date = &rest[..rest.len().min(8)];
+            let ext_ok = rest.ends_with(".zip") || rest.ends_with(".xml");
+            if ext_ok && date.len() == 8 && date.chars().all(|c| c.is_ascii_digit()) && rest.len() == 12 {
+                dates.insert(date.to_string());
+                files.push((date.to_string(), name));
+            }
+        }
+    }
+    let cutoff: Vec<&String> = dates.iter().rev().skip(keep).collect();
+    for (date, name) in &files {
+        if cutoff.contains(&date) {
+            match std::fs::remove_file(dir.join(name)) {
+                Ok(()) => println!("Removed old download {}", name),
+                Err(e) => eprintln!("Warning: cannot remove {}: {}", name, e),
+            }
+        }
+    }
+}
+
 fn parse_xml(file_path: &str) -> Result<Vec<Record>, Box<dyn std::error::Error>> {
     let file = File::open(file_path)?;
     let buf_reader = BufReader::new(file);
@@ -288,7 +327,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // Check if we need to download
     let xml_file = if args[1] == "--download" {
-        download_latest_xml()?
+        let xml = download_latest_xml()?;
+        prune_old_downloads(Path::new("."), KEEP_DOWNLOADS);
+        xml
     } else {
         args[1].clone()
     };
@@ -493,4 +534,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Done! Output written to {}", output_file);
     
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_the_newest_three_days_and_nothing_else_is_touched() {
+        let dir = std::env::temp_dir().join(format!("smi_prune_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let names = [
+            "AipsDownload_20260926.zip", "AipsDownload_20260926.xml",
+            "AipsDownload_20260927.zip", "AipsDownload_20260927.xml",
+            "AipsDownload_20260928.xml",
+            "AipsDownload_20260929.zip", "AipsDownload_20260929.xml",
+            "AipsDownload_20260930.zip", "AipsDownload_20260930.xml",
+            "AipsDownload_latest.xml", "AIPS_Download.xsd", "today",
+        ];
+        for n in names.iter() { File::create(dir.join(n)).unwrap(); }
+        prune_old_downloads(&dir, 3);
+        let mut left: Vec<String> = std::fs::read_dir(&dir).unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+        left.sort();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(left, vec![
+            "AIPS_Download.xsd", "AipsDownload_20260928.xml",
+            "AipsDownload_20260929.xml", "AipsDownload_20260929.zip",
+            "AipsDownload_20260930.xml", "AipsDownload_20260930.zip",
+            "AipsDownload_latest.xml", "today",
+        ]);
+    }
 }
