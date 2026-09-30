@@ -18,11 +18,13 @@ cargo run --release -- --download --local                  # Extract today's uni
 cargo run --release -- AipsDownload_20260130.xml           # Process existing local XML file
 ```
 
-There are no tests, lints, or CI configured.
+`cargo test` runs one unit test (pruning of old downloads). No lints or CI.
+
+**Production** runs from `/etc/crontab` at 04:51 as `target/debug/swissmedicinfo --download --local` — the **debug** build, with the working directory `/home/zdavatz`. After a change run `cargo build`, not only `--release`, or cron keeps the old binary.
 
 ## Architecture
 
-**Download flow:** `download_latest_xml()` fetches https://download.swissmedicinfo.ch/, scrapes ASP.NET ViewState from the HTML form, POSTs to trigger a ZIP download, then extracts the XML from the ZIP.
+**Download flow:** `download_latest_xml()` fetches https://download.swissmedicinfo.ch/, scrapes ASP.NET ViewState from the HTML form, POSTs to trigger a ZIP download, then extracts the XML from the ZIP. ZIP and XML are written as `AipsDownload_YYYYMMDD.{zip,xml}` into the current working directory. `prune_old_downloads()` then deletes every such file except the three newest dates (`KEEP_DOWNLOADS`); before 30.09.2026 nothing was deleted and the home directory held 5.1 GB of them.
 
 **XML parsing:** `parse_xml()` uses quick-xml event-driven parsing with a state machine to extract 5-digit identifiers from `RegulatedAuthorization` elements and associated dates (YYYY-MM-DD).
 
