@@ -45,3 +45,9 @@ cargo run --release -- AipsDownload_20260130.xml --today
 
 ### Process local XML for today's IDs (local)
 cargo run --release -- AipsDownload_20260130.xml --local
+
+## Old downloads are pruned
+
+Every `--download` saves `AipsDownload_YYYYMMDD.zip` and `.xml` (about 25 MB a day) in the **current working directory**. The daily cron job in `/etc/crontab` (04:51, `--download --local`) runs in `/home/zdavatz`, and until 30.09.2026 nothing ever removed them: 215 ZIPs and 210 XMLs, 5.1 GB since February. After each download the tool now deletes all `AipsDownload_YYYYMMDD.zip/.xml` in the working directory except the three newest dates. Other files (`today`, `AIPS_Download.xsd`, anything not named with an 8-digit date) are left alone. Test: `cargo test`.
+
+The cron line calls `target/debug/swissmedicinfo`, so after a change run `cargo build` (not only `--release`).
